@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Airport Performance Scorecard</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>✈️ Airport Performance Scorecard</h1>
+            <p class="subtitle" id="subtitle">Flight Delay Predictions & Airport Rankings</p>
+            <div class="controls">
+                <button onclick="loadData()" id="refreshBtn">
+                    <i class="fas fa-sync-alt"></i> Load Data
+                </button>
+                <button onclick="window.open('/download/scorecard')" class="btn-success">
+                    <i class="fas fa-download"></i> Download Scorecard
+                </button>
+                <button onclick="window.open('/visualization')" class="btn-secondary">
+                    <i class="fas fa-chart-bar"></i> View Visualization
+                </button>
+            </div>
+        </header>
+        
+        <div id="stats" class="stats-grid"></div>
+        
+        <div class="main-content">
+            
+            <div class="card">
+                <div class="status-bar">
+                    <span id="dataStatus"><i class="fas fa-clock"></i> Loading...</span>
+                    <span id="airportCount">0 airports</span>
+                </div>
+                <h2><i class="fas fa-trophy"></i> Airport Rankings</h2>
+                <div class="search-box">
+                    <input type="text" id="searchInput" placeholder="Search airports (e.g. JFK, LAX)...">
+                </div>
+                <div id="airportsTable">
+                    <div class="loading">
+                        <i class="fas fa-spinner fa-spin fa-2x"></i>
+                        <p>Loading airport data...</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div style="display: flex; flex-direction: column; gap: 25px;">
+                
+                <div class="card predictor-card">
+                    <h2><i class="fas fa-calculator"></i> Predict Flight Delay</h2>
+                    <p style="color:#666; font-size:0.9rem; margin-bottom:15px;">Enter flight details to estimate delay risk.</p>
+                    
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Month (1-12)</label>
+                            <input type="number" id="p_month" min="1" max="12" value="7">
+                        </div>
+                        <div class="form-group">
+                            <label>Day of Week (1-7)</label>
+                            <input type="number" id="p_day" min="1" max="7" value="5" placeholder="1=Mon">
+                        </div>
+                        <div class="form-group">
+                            <label>Hour (0-23)</label>
+                            <input type="number" id="p_hour" min="0" max="23" value="14">
+                        </div>
+                        <div class="form-group">
+                            <label>Airline Code</label>
+                            <input type="text" id="p_airline" placeholder="e.g. UA, AA, DL" value="UA">
+                        </div>
+                        <div class="form-group">
+                            <label>Origin Airport</label>
+                            <input type="text" id="p_origin" placeholder="e.g. JFK" value="JFK">
+                        </div>
+                        <div class="form-group">
+                            <label>Destination Airport</label>
+                            <input type="text" id="p_dest" placeholder="e.g. LAX" value="LAX">
+                        </div>
+                    </div>
+                    
+                    <button onclick="predictFlight()" class="btn-predict">
+                        Calculate Prediction
+                    </button>
+                    
+                    <div id="predictionResult" class="result-box" style="display: none;"></div>
+                </div>
+
+                <div class="card">
+                    <h2><i class="fas fa-chart-pie"></i> Performance Overview</h2>
+                    <div style="height: 300px;">
+                        <canvas id="scoreChart"></canvas>
+                    </div>
+                    <div class="visualization-container">
+                        <img id="vizImage" src="" alt="Visualization" style="display: none;">
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <footer>
+            <p>Flight Delay Prediction System | Data Science Project</p>
+            <p>Dashboard loaded: <span id="currentDate"></span></p>
+        </footer>
+    </div>
+    
+    <script>
+        document.getElementById('currentDate').textContent = new Date().toLocaleString();
+        
+        let allAirports = [];
+        let chartInstance = null;
+        
+        function showToast(message, type = 'info', duration = 3000) {
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : 'info-circle'}"></i> ${message}`;
+            document.body.appendChild(toast);
+            setTimeout(() => {
+                toast.style.animation = 'fadeOut 0.5s ease-out forwards';
+                setTimeout(() => toast.remove(), 500);
+            }, duration);
+        }
+        
+        function getScoreClass(score) {
+            if (score >= 80) return 'score-excellent';
+            if (score >= 60) return 'score-good';
+            if (score >= 40) return 'score-fair';
+            return 'score-poor';
+        }
+
+        async function predictFlight() {
+            const btn = document.querySelector('.btn-predict');
+            const resBox = document.getElementById('predictionResult');
+            
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Calculating...';
+            btn.disabled = true;
+            resBox.style.display = 'none';
+
+            const data = {
+                MONTH: document.getElementById('p_month').value,
+                DAY_OF_WEEK: document.getElementById('p_day').value,
+                HOUR: document.getElementById('p_hour').value,
+                AIRLINE: document.getElementById('p_airline').value,
+                ORIGIN_AIRPORT: document.getElementById('p_origin').value,
+                DESTINATION_AIRPORT: document.getElementById('p_dest').value
+            };
+
+            try {
+                const response = await fetch('/api/predict_flight', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(data)
+                });
+                const result = await response.json();
+
+                resBox.style.display = 'block';
+                
+                if(result.error) {
+                    resBox.innerHTML = `<span style="color:red"><i class="fas fa-exclamation-circle"></i> ${result.error}</span>`;
+                } else {
+                    let color;
+                    if (result.risk_level === 'High') {
+                        color = '#e74c3c'; 
+                    } else if (result.risk_level === 'Medium') {
+                        color = '#f39c12'; 
+                    } else {
+                        color = '#2ecc71'; 
+                    }  
+                    resBox.innerHTML = `
+                        <div style="text-align:center; margin-bottom:10px; border-bottom:1px solid #ddd; padding-bottom:10px;">
+                            <strong>${result.route}</strong><br>
+                            <small style="color:#666">Distance: ${result.calculated_distance} miles</small>
+                        </div>
+                        <div style="text-align:center; margin-bottom:10px;">
+                            <span style="font-size: 1.2rem; font-weight:bold; color:${color}">
+                                ${result.risk_level} Risk
+                            </span>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; font-size:0.9rem;">
+                            <span>Prob. of Delay:</span>
+                            <strong>${result.probability_percent}%</strong>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; font-size:0.9rem;">
+                            <span>Est. Delay:</span>
+                            <strong>${result.estimated_delay_minutes} min</strong>
+                        </div>
+                    `;
+                }
+            } catch(e) {
+                resBox.style.display = 'block';
+                resBox.innerHTML = '<span style="color:red">Connection Error. Is the server running?</span>';
+                console.error(e);
+            } finally {
+                btn.innerHTML = 'Calculate Prediction';
+                btn.disabled = false;
+            }
+        }
+
+        async function loadData() {
+            const refreshBtn = document.getElementById('refreshBtn');
+            const originalText = refreshBtn.innerHTML;
+            refreshBtn.disabled = true;
+            refreshBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+            updateStatus('Loading data...', 'fa-spinner fa-spin');
+            
+            try {
+                const response = await fetch('/api/scorecard');
+                const data = await response.json();
+                
+                if (data.error) {
+                    showEmptyState(data.error);
+                    updateStatus('Data not found', 'fa-exclamation-triangle');
+                } else {
+                    allAirports = data.airports;
+                    renderStats(data.summary);
+                    renderAirportsTable(allAirports);
+                    renderChart(data.airports);
+                    loadVisualization();
+                    
+                    document.getElementById('airportCount').textContent = `${data.total_airports} airports`;
+                    updateStatus('Data loaded', 'fa-check-circle');
+                    showToast(`Loaded ${data.total_airports} airports`, 'success');
+                }
+            } catch (error) {
+                console.error(error);
+                updateStatus('Connection error', 'fa-exclamation-triangle');
+            } finally {
+                refreshBtn.disabled = false;
+                refreshBtn.innerHTML = originalText;
+            }
+        }
+        
+        function updateStatus(text, icon) {
+            const statusEl = document.getElementById('dataStatus');
+            if (statusEl) statusEl.innerHTML = `<i class="fas ${icon}"></i> ${text}`;
+        }
+        
+        function showEmptyState(message) {
+            document.getElementById('airportsTable').innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-plane-slash"></i>
+                    <h3>No Data Available</h3>
+                    <p>${message}</p>
+                    <p><small>Run <code>python main.py</code> to generate the model.</small></p>
+                </div>`;
+            document.getElementById('stats').innerHTML = '';
+        }
+        
+        function renderStats(summary) {
+            if (!summary) return;
+            document.getElementById('stats').innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-value">${summary.best_score.toFixed(1)}</div>
+                    <div class="stat-label">🏆 Best: ${summary.best_airport}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value ${summary.avg_delay > 30 ? 'bad' : summary.avg_delay > 15 ? 'warning' : 'good'}">
+                        ${summary.avg_delay.toFixed(1)}
+                    </div>
+                    <div class="stat-label">Avg Delay (min)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${summary.avg_score.toFixed(1)}</div>
+                    <div class="stat-label">Global Score</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value ${summary.worst_score < 40 ? 'bad' : summary.worst_score < 60 ? 'warning' : 'good'}">
+                        ${summary.worst_score.toFixed(1)}
+                    </div>
+                    <div class="stat-label">⚠️ Worst: ${summary.worst_airport}</div>
+                </div>
+            `;
+        }
+        
+        function renderAirportsTable(airports) {
+            if (airports.length === 0) return;
+            
+            const displayAirports = airports; 
+
+            const tableHTML = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Rank</th>
+                            <th>Airport</th>
+                            <th>Score</th>
+                            <th>Avg Delay</th>
+                        </tr>
+                    </thead>
+                    <tbody id="airportsTableBody">
+                        ${displayAirports.map((airport, index) => `
+                            <tr>
+                                <td><strong>#${index + 1}</strong></td>
+                                <td>
+                                    <div style="display: flex; align-items: center; gap: 10px;">
+                                        <div class="airport-code">${airport.Airport}</div>
+                                        <div><strong>${airport.Airport}</strong></div>
+                                    </div>
+                                </td>
+                                <td><span class="score-badge ${getScoreClass(airport.Score)}">${airport.Score.toFixed(1)}</span></td>
+                                <td>${airport.Avg_Delay} min</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+            document.getElementById('airportsTable').innerHTML = tableHTML;
+            
+            const searchInput = document.getElementById('searchInput');
+            if (searchInput) {
+                searchInput.oninput = function() {
+                    const searchTerm = this.value.toLowerCase();
+                    const rows = document.querySelectorAll('#airportsTableBody tr');
+                    rows.forEach(row => {
+                        const code = row.querySelector('.airport-code').textContent.toLowerCase();
+                        if (code.includes(searchTerm)) row.style.display = '';
+                        else row.style.display = 'none';
+                    });
+                };
+            }
+        }
+        
+        function renderChart(airports) {
+            const ctx = document.getElementById('scoreChart').getContext('2d');
+            if (chartInstance) chartInstance.destroy();
+            const scores = airports.map(a => a.Score);
+            const labels = airports.map(a => a.Airport).slice(0, 10);
+            
+            chartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Score',
+                        data: scores.slice(0, 10),
+                        backgroundColor: 'rgba(74, 107, 223, 0.6)',
+                        borderColor: 'rgba(74, 107, 223, 1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: { y: { beginAtZero: true, max: 100 } },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+        
+        function loadVisualization() {
+            const img = document.getElementById('vizImage');
+            img.src = '/visualization?' + new Date().getTime();
+            img.style.display = 'block';
+            img.onerror = function() { img.style.display = 'none'; };
+        }
+        
+        document.addEventListener('DOMContentLoaded', loadData);
+    </script>
+</body>
+</html>
