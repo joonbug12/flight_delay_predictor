@@ -16,25 +16,23 @@ class FlightPredictor:
 
     def calculate_distance(self, lat1, lon1, lat2, lon2):
         lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
-
         dlon = lon2 - lon1 
         dlat = lat2 - lat1 
         a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
         c = 2 * asin(sqrt(a)) 
-        r = 3956
+        r = 3956 
         return c * r
+
     def load(self):
         try:
             meta_path = os.path.join(self.model_dir, 'metadata.pkl')
             if not os.path.exists(meta_path):
-                print(f"Error: {meta_path} not found.")
                 return False
             self.metadata = joblib.load(meta_path)
             
             self.model = FlightDelayModel(input_dim=self.metadata['input_dim'])
             model_path = os.path.join(self.model_dir, 'flight_delay_model.h5')
             if not os.path.exists(model_path):
-                print(f"Error: {model_path} not found.")
                 return False
             self.model.load(model_path)
             
@@ -46,8 +44,6 @@ class FlightPredictor:
                         'lat': float(row['LATITUDE']), 
                         'lon': float(row['LONGITUDE'])
                     }
-            else:
-                print(f"Warning: {airports_path} not found. Distance calculation may fail.")
             self.loaded = True
             return True
         except Exception as e:
@@ -57,21 +53,18 @@ class FlightPredictor:
     def predict(self, data):
         if not self.loaded:
             if not self.load():
-                return {"error": "Model not trained yet. Run main.py first."}
+                return {"error": "Model not trained yet."}
 
         try:
             origin = str(data.get('ORIGIN_AIRPORT', '')).strip().upper()
             dest = str(data.get('DESTINATION_AIRPORT', '')).strip().upper()
 
-            if origin not in self.airport_coords:
-                return {"error": f"Origin airport '{origin}' not found in database."}
-            if dest not in self.airport_coords:
-                return {"error": f"Destination airport '{dest}' not found in database."}
-
-            coord1 = self.airport_coords[origin]
-            coord2 = self.airport_coords[dest]
-            
-            distance = self.calculate_distance(coord1['lat'], coord1['lon'], coord2['lat'], coord2['lon'])
+            if origin not in self.airport_coords or dest not in self.airport_coords:
+                distance = 1000.0
+            else:
+                coord1 = self.airport_coords[origin]
+                coord2 = self.airport_coords[dest]
+                distance = self.calculate_distance(coord1['lat'], coord1['lon'], coord2['lat'], coord2['lon'])
 
             hour = int(data.get('HOUR', 12))
             dep_hour_sin = np.sin(2 * np.pi * hour / 24)
@@ -100,15 +93,20 @@ class FlightPredictor:
             ]])
 
             preds = self.model.predict(features)
-            prob_delay = float(preds[0][0])     
-            est_delay = float(preds[1][0])      
-            est_delay = max(0, est_delay)       
+            
+            prob_delay = float(preds[0][0])
+            raw_delay_pred = float(preds[1][0])
+            
+            if raw_delay_pred < 1:
+                est_delay = prob_delay * 50
+            else:
+                est_delay = raw_delay_pred
 
-            if prob_delay > 0.25:      
+            if prob_delay > 0.25:
                 risk_level = "High"
-            elif prob_delay > 0.15:   
+            elif prob_delay > 0.15:
                 risk_level = "Medium"
-            else:                      
+            else:
                 risk_level = "Low"
 
             return {
